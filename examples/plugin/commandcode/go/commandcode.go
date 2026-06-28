@@ -548,10 +548,10 @@ func commandCodeNDJSONToChatCompletion(raw []byte, model string, created int64) 
 }
 
 type commandCodeAggregate struct {
+	ID           string
 	Model        string
 	Created      int64
 	Content      strings.Builder
-	Reasoning    strings.Builder
 	FinishReason string
 	Usage        commandCodeUsage
 	ToolCalls    []openAIResponseToolCall
@@ -569,6 +569,7 @@ type commandCodeUsage struct {
 	OutputTokens      int `json:"outputTokens"`
 	TotalTokens       int `json:"totalTokens"`
 	CachedInputTokens int `json:"cachedInputTokens"`
+	ReasoningTokens   int `json:"reasoningTokens"`
 }
 
 type openAIResponseToolCall struct {
@@ -587,6 +588,7 @@ func newCommandCodeAggregate(model string, created int64) *commandCodeAggregate 
 		created = time.Now().Unix()
 	}
 	return &commandCodeAggregate{
+		ID:         newCommandCodeCompletionID(),
 		Model:      normalizeCommandCodeModel(model),
 		Created:    created,
 		toolInputs: make(map[string]*toolInputState),
@@ -600,7 +602,7 @@ func (a *commandCodeAggregate) ApplyLine(line []byte) error {
 	}
 	switch stringFromAny(event["type"]) {
 	case "reasoning-delta":
-		a.Reasoning.WriteString(rawStringFromAny(event["text"]))
+		// OpenAI Chat Completions has no standard message field for reasoning text.
 	case "text-delta":
 		a.Content.WriteString(rawStringFromAny(event["text"]))
 	case "tool-input-start":
@@ -645,22 +647,33 @@ func (a *commandCodeAggregate) appendToolCall(id, name, arguments string) {
 	if id == "" {
 		return
 	}
-	for _, existing := range a.ToolCalls {
-		if existing.ID == id {
-			return
-		}
-	}
+	name = strings.TrimSpace(name)
 	if strings.TrimSpace(arguments) == "" {
 		arguments = "{}"
+	}
+	for index := range a.ToolCalls {
+		if a.ToolCalls[index].ID == id {
+			if name != "" {
+				a.ToolCalls[index].Function.Name = name
+			}
+			if arguments != "{}" {
+				a.ToolCalls[index].Function.Arguments = arguments
+			}
+			return
+		}
 	}
 	a.ToolCalls = append(a.ToolCalls, openAIResponseToolCall{
 		ID:   id,
 		Type: "function",
 		Function: openAIResponseToolFunction{
-			Name:      strings.TrimSpace(name),
+			Name:      name,
 			Arguments: arguments,
 		},
 	})
+}
+
+func commandCodeToolEventID(event map[string]any) string {
+	return firstNonEmptyString(stringFromAny(event["id"]), stringFromAny(event["toolCallId"]))
 }
 
 func (a *commandCodeAggregate) ChatCompletion() ([]byte, error) {
@@ -668,18 +681,18 @@ func (a *commandCodeAggregate) ChatCompletion() ([]byte, error) {
 	if finish == "" {
 		finish = "stop"
 	}
+	if finish == "stop" && len(a.ToolCalls) > 0 {
+		finish = "tool_calls"
+	}
 	message := map[string]any{
 		"role":    "assistant",
 		"content": a.Content.String(),
-	}
-	if reasoning := a.Reasoning.String(); reasoning != "" {
-		message["reasoning_content"] = reasoning
 	}
 	if len(a.ToolCalls) > 0 {
 		message["tool_calls"] = a.ToolCalls
 	}
 	return json.Marshal(map[string]any{
-		"id":      "chatcmpl-commandcode",
+		"id":      a.ID,
 		"object":  "chat.completion",
 		"created": a.Created,
 		"model":   a.Model,
@@ -697,11 +710,25 @@ func commandCodeEventToOpenAIStreamChunks(line []byte, model string, created int
 }
 
 type commandCodeStreamConverter struct {
+	id            string
 	model         string
 	created       int64
 	pendingUsage  *commandCodeUsage
 	finishEmitted bool
 	usageEmitted  bool
+	roleEmitted   bool
+	sawToolCall   bool
+	nextToolIndex int
+	toolCalls     map[string]*streamToolCallState
+}
+
+type streamToolCallState struct {
+	ID                string
+	Name              string
+	Index             int
+	StartEmitted      bool
+	ArgumentEmitted   bool
+	TerminalProcessed bool
 }
 
 func newCommandCodeStreamConverter(model string, created int64) *commandCodeStreamConverter {
@@ -709,8 +736,10 @@ func newCommandCodeStreamConverter(model string, created int64) *commandCodeStre
 		created = time.Now().Unix()
 	}
 	return &commandCodeStreamConverter{
-		model:   normalizeCommandCodeModel(model),
-		created: created,
+		id:        newCommandCodeCompletionID(),
+		model:     normalizeCommandCodeModel(model),
+		created:   created,
+		toolCalls: make(map[string]*streamToolCallState),
 	}
 }
 
@@ -721,17 +750,76 @@ func (c *commandCodeStreamConverter) ConvertLine(line []byte) ([][]byte, error) 
 	}
 	switch stringFromAny(event["type"]) {
 	case "reasoning-delta":
-		text := rawStringFromAny(event["text"])
-		if text == "" {
-			return nil, nil
-		}
-		return [][]byte{chatCompletionStreamChunk(c.model, c.created, map[string]any{"reasoning_content": text}, "")}, nil
+		return nil, nil
 	case "text-delta":
 		text := rawStringFromAny(event["text"])
 		if text == "" {
 			return nil, nil
 		}
-		return [][]byte{chatCompletionStreamChunk(c.model, c.created, map[string]any{"content": text}, "")}, nil
+		chunks := make([][]byte, 0, 2)
+		c.appendRoleChunk(&chunks)
+		chunks = append(chunks, chatCompletionStreamChunk(c.id, c.model, c.created, map[string]any{"content": text}, ""))
+		return chunks, nil
+	case "tool-input-start":
+		id := commandCodeToolEventID(event)
+		if id == "" {
+			return nil, nil
+		}
+		c.sawToolCall = true
+		state := c.streamToolCall(id, stringFromAny(event["toolName"]))
+		chunks := make([][]byte, 0, 2)
+		c.appendRoleChunk(&chunks)
+		c.appendToolCallStart(&chunks, state, "")
+		return chunks, nil
+	case "tool-input-delta":
+		id := commandCodeToolEventID(event)
+		if id == "" {
+			return nil, nil
+		}
+		c.sawToolCall = true
+		state := c.streamToolCall(id, stringFromAny(event["toolName"]))
+		delta := rawStringFromAny(event["delta"])
+		if delta == "" {
+			return nil, nil
+		}
+		chunks := make([][]byte, 0, 3)
+		c.appendRoleChunk(&chunks)
+		c.appendToolCallStart(&chunks, state, "")
+		c.appendToolCallArguments(&chunks, state, delta)
+		return chunks, nil
+	case "tool-input-end":
+		id := commandCodeToolEventID(event)
+		if id == "" {
+			return nil, nil
+		}
+		if state := c.toolCalls[id]; state != nil {
+			state.TerminalProcessed = true
+		}
+		return nil, nil
+	case "tool-call":
+		id := commandCodeToolEventID(event)
+		if id == "" {
+			return nil, nil
+		}
+		c.sawToolCall = true
+		state := c.streamToolCall(id, stringFromAny(event["toolName"]))
+		if state.TerminalProcessed && state.ArgumentEmitted {
+			return nil, nil
+		}
+		args := ""
+		if input, ok := event["input"]; ok {
+			if raw, errMarshal := json.Marshal(input); errMarshal == nil {
+				args = string(raw)
+			}
+		}
+		chunks := make([][]byte, 0, 3)
+		c.appendRoleChunk(&chunks)
+		c.appendToolCallStart(&chunks, state, args)
+		if args != "" && !state.ArgumentEmitted {
+			c.appendToolCallArguments(&chunks, state, args)
+		}
+		state.TerminalProcessed = true
+		return chunks, nil
 	case "finish-step":
 		if usage, ok := commandCodeUsageFromEvent(event); ok {
 			c.pendingUsage = &usage
@@ -767,35 +855,104 @@ func (c *commandCodeStreamConverter) finishChunks(finish string, usage commandCo
 		return nil
 	}
 	c.finishEmitted = true
-	chunks := [][]byte{chatCompletionStreamChunk(c.model, c.created, map[string]any{}, finish)}
+	if finish == "stop" && c.sawToolCall {
+		finish = "tool_calls"
+	}
+	chunks := make([][]byte, 0, 3)
+	c.appendRoleChunk(&chunks)
+	chunks = append(chunks, chatCompletionStreamChunk(c.id, c.model, c.created, map[string]any{}, finish))
 	if hasUsage && !c.usageEmitted {
 		c.usageEmitted = true
-		chunks = append(chunks, chatCompletionUsageStreamChunk(c.model, c.created, usage))
+		chunks = append(chunks, chatCompletionUsageStreamChunk(c.id, c.model, c.created, usage))
 	}
 	return chunks
 }
 
-func chatCompletionStreamChunk(model string, created int64, delta map[string]any, finish string) []byte {
+func (c *commandCodeStreamConverter) appendRoleChunk(chunks *[][]byte) {
+	if c.roleEmitted {
+		return
+	}
+	c.roleEmitted = true
+	*chunks = append(*chunks, chatCompletionStreamChunk(c.id, c.model, c.created, map[string]any{"role": "assistant"}, ""))
+}
+
+func (c *commandCodeStreamConverter) streamToolCall(id, name string) *streamToolCallState {
+	if state := c.toolCalls[id]; state != nil {
+		if state.Name == "" {
+			state.Name = strings.TrimSpace(name)
+		}
+		return state
+	}
+	state := &streamToolCallState{
+		ID:    id,
+		Name:  strings.TrimSpace(name),
+		Index: c.nextToolIndex,
+	}
+	c.nextToolIndex++
+	c.toolCalls[id] = state
+	return state
+}
+
+func (c *commandCodeStreamConverter) appendToolCallStart(chunks *[][]byte, state *streamToolCallState, arguments string) {
+	if state.StartEmitted {
+		return
+	}
+	function := map[string]any{}
+	if state.Name != "" {
+		function["name"] = state.Name
+	}
+	if arguments != "" {
+		function["arguments"] = arguments
+		state.ArgumentEmitted = true
+	} else {
+		function["arguments"] = ""
+	}
+	state.StartEmitted = true
+	*chunks = append(*chunks, chatCompletionStreamChunk(c.id, c.model, c.created, map[string]any{
+		"tool_calls": []any{map[string]any{
+			"index":    state.Index,
+			"id":       state.ID,
+			"type":     "function",
+			"function": function,
+		}},
+	}, ""))
+}
+
+func (c *commandCodeStreamConverter) appendToolCallArguments(chunks *[][]byte, state *streamToolCallState, arguments string) {
+	state.ArgumentEmitted = true
+	*chunks = append(*chunks, chatCompletionStreamChunk(c.id, c.model, c.created, map[string]any{
+		"tool_calls": []any{map[string]any{
+			"index": state.Index,
+			"function": map[string]any{
+				"arguments": arguments,
+			},
+		}},
+	}, ""))
+}
+
+func chatCompletionStreamChunk(id, model string, created int64, delta map[string]any, finish string) []byte {
 	choice := map[string]any{
-		"index": 0,
-		"delta": delta,
+		"index":         0,
+		"delta":         delta,
+		"finish_reason": nil,
 	}
 	if finish != "" {
 		choice["finish_reason"] = finish
 	}
 	body, _ := json.Marshal(map[string]any{
-		"id":      "chatcmpl-commandcode",
+		"id":      id,
 		"object":  "chat.completion.chunk",
 		"created": created,
 		"model":   normalizeCommandCodeModel(model),
 		"choices": []any{choice},
+		"usage":   nil,
 	})
 	return body
 }
 
-func chatCompletionUsageStreamChunk(model string, created int64, usage commandCodeUsage) []byte {
+func chatCompletionUsageStreamChunk(id, model string, created int64, usage commandCodeUsage) []byte {
 	body, _ := json.Marshal(map[string]any{
-		"id":      "chatcmpl-commandcode",
+		"id":      id,
 		"object":  "chat.completion.chunk",
 		"created": created,
 		"model":   normalizeCommandCodeModel(model),
@@ -811,13 +968,18 @@ func commandCodeUsageFromEvent(event map[string]any) (commandCodeUsage, bool) {
 		return commandCodeUsage{}, false
 	}
 	usage := parseCommandCodeUsage(usageMap)
-	return usage, usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.TotalTokens != 0 || usage.CachedInputTokens != 0
+	return usage, usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.TotalTokens != 0 || usage.CachedInputTokens != 0 || usage.ReasoningTokens != 0
 }
 
 func parseCommandCodeUsage(raw map[string]any) commandCodeUsage {
 	input := intFromAny(raw["inputTokens"])
 	cached := intFromAny(raw["cachedInputTokens"])
 	output := intFromAny(raw["outputTokens"])
+	reasoning := firstNonZeroInt(
+		intFromAny(raw["reasoningTokens"]),
+		intFromNested(raw, "outputTokenDetails", "reasoningTokens"),
+		intFromNested(raw, "raw", "completion_tokens_details", "reasoning_tokens"),
+	)
 	total := input + output
 	if total == 0 {
 		total = intFromAny(raw["totalTokens"])
@@ -827,6 +989,7 @@ func parseCommandCodeUsage(raw map[string]any) commandCodeUsage {
 		OutputTokens:      output,
 		TotalTokens:       total,
 		CachedInputTokens: cached,
+		ReasoningTokens:   reasoning,
 	}
 }
 
@@ -838,6 +1001,9 @@ func openAIUsageMap(usage commandCodeUsage) map[string]any {
 	}
 	if usage.CachedInputTokens > 0 {
 		out["prompt_tokens_details"] = map[string]int{"cached_tokens": usage.CachedInputTokens}
+	}
+	if usage.ReasoningTokens > 0 {
+		out["completion_tokens_details"] = map[string]int{"reasoning_tokens": usage.ReasoningTokens}
 	}
 	return out
 }
@@ -941,6 +1107,14 @@ func randomOAuthState() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
+func newCommandCodeCompletionID() string {
+	buf := make([]byte, 12)
+	if _, errRead := rand.Read(buf); errRead == nil {
+		return "chatcmpl-commandcode-" + hex.EncodeToString(buf)
+	}
+	return fmt.Sprintf("chatcmpl-commandcode-%d", time.Now().UnixNano())
+}
+
 func shortSecretHash(secret string) string {
 	sum := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(sum[:])[:12]
@@ -996,6 +1170,27 @@ func intFromAny(value any) int {
 	default:
 		return 0
 	}
+}
+
+func intFromNested(raw map[string]any, keys ...string) int {
+	var current any = raw
+	for _, key := range keys {
+		mapped, ok := current.(map[string]any)
+		if !ok {
+			return 0
+		}
+		current = mapped[key]
+	}
+	return intFromAny(current)
+}
+
+func firstNonZeroInt(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func normalizeCommandCodeModel(model string) string {
