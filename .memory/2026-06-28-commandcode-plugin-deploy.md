@@ -20,9 +20,9 @@
 ## Verification
 
 - `/v1/models` on `10.0.8.9` returned HTTP 200 with 35 models.
-- Command Code models visible: `deepseek/deepseek-v4-flash`, `deepseek/deepseek-v4-pro`.
+- Command Code models visible: 12 `owned_by=commandcode` models, including `deepseek/deepseek-v4-flash`, `deepseek/deepseek-v4-pro`, `zai-org/GLM-5.2`, and `zai-org/GLM-5.1`.
 - Existing model counts remained unchanged after plugin enablement: Grok 12, Gemini 8.
-- `zai-org/GLM-5.2` was already visible from the existing provider pool and passed a non-streaming chat smoke test.
+- `zai-org/GLM-5.2` is provided by the Command Code plugin and passed a non-streaming chat smoke test.
 - Command Code non-streaming smoke: `deepseek/deepseek-v4-flash` returned HTTP 200, content `OK`, usage present.
 - Command Code streaming smoke after fix: `deepseek/deepseek-v4-flash` returned HTTP 200, content `OK`, 15 JSON chunks, 12 reasoning chunks, `[DONE]` observed, malformed chunk count 0.
 
@@ -30,4 +30,4 @@
 
 - The initial streaming deploy emitted plugin chunks as full SSE frames, while CLIProxyAPI's OpenAI handler also wraps chunks as SSE. That produced downstream `data: data: {...}` lines.
 - The stream fix changes Command Code plugin stream output to raw OpenAI chat-completion chunk JSON. The existing OpenAI handler remains responsible for `data:` framing and terminal `[DONE]`.
-- GLM-5.2 is not part of the new Command Code plugin model list in this branch.
+- GLM-5.2 and GLM-5.1 are part of the Command Code plugin model list in this branch.
