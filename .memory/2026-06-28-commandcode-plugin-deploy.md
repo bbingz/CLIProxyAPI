@@ -12,7 +12,7 @@
 
 - Host: `10.0.8.9`
 - Service command: `/Users/bing/-Tools-/CLIProxyAPI/bin/CLIProxyAPI -config /Users/bing/-Tools-/CLIProxyAPI/config.yaml`
-- Active PID after stream fix: `23830`
+- Active PID after GLM alias deploy: `25194`
 - Listening port: `8317`
 - Main deployment backup: `/Users/bing/-Tools-/CLIProxyAPI/deploy-backups/20260628-181740`
 - Stream-fix plugin backup: `/Users/bing/-Tools-/CLIProxyAPI/deploy-backups/20260628-182420-streamfix`
