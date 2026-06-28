@@ -190,6 +190,25 @@ func TestCommandCodeEventToOpenAIStreamChunksReturnsPayloadOnly(t *testing.T) {
 	}
 }
 
+func TestCommandCodeGLMAliases(t *testing.T) {
+	if got := normalizeCommandCodeModel("glm-5.2"); got != "zai-org/GLM-5.2" {
+		t.Fatalf("normalize glm-5.2 = %q", got)
+	}
+	if got := normalizeCommandCodeModel("commandcode/glm-5.1"); got != "zai-org/GLM-5.1" {
+		t.Fatalf("normalize commandcode/glm-5.1 = %q", got)
+	}
+	models := defaultCommandCodeModels()
+	seen := map[string]bool{}
+	for _, model := range models {
+		seen[model.ID] = true
+	}
+	for _, id := range []string{"glm-5.2", "glm-5.1", "zai-org/GLM-5.2", "zai-org/GLM-5.1"} {
+		if !seen[id] {
+			t.Fatalf("model %q not registered", id)
+		}
+	}
+}
+
 func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	raw, err := json.Marshal(value)

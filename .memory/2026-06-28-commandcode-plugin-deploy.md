@@ -6,6 +6,7 @@
 - Deployed the feature branch build to `10.0.8.9` for live stability testing.
 - Installed the Command Code plugin at `/Users/bing/-Tools-/CLIProxyAPI/plugins/commandcode.dylib`.
 - Installed Command Code auth material at `/Users/bing/.cli-proxy-api/commandcode.json` with mode `0600`.
+- Added short GLM aliases `glm-5.2` and `glm-5.1` after UI validation showed clients commonly use those names instead of the canonical Command Code IDs.
 
 ## Live host state
 
@@ -15,7 +16,8 @@
 - Listening port: `8317`
 - Main deployment backup: `/Users/bing/-Tools-/CLIProxyAPI/deploy-backups/20260628-181740`
 - Stream-fix plugin backup: `/Users/bing/-Tools-/CLIProxyAPI/deploy-backups/20260628-182420-streamfix`
-- Deployed stream-fix plugin sha256: `e0845c89c3d1e96b332fdcece09cd85abae68b0a4db07394250534c6aeeab27b`
+- GLM alias plugin backup: `/Users/bing/-Tools-/CLIProxyAPI/deploy-backups/20260628-184036-glm-alias`
+- Deployed GLM alias plugin sha256: `7943b7e89d4b0967c4ad2ff575d1a54cbc85a0b55a99750d7bcf93249571ba07`
 
 ## Verification
 
@@ -25,9 +27,11 @@
 - `zai-org/GLM-5.2` is provided by the Command Code plugin and passed a non-streaming chat smoke test.
 - Command Code non-streaming smoke: `deepseek/deepseek-v4-flash` returned HTTP 200, content `OK`, usage present.
 - Command Code streaming smoke after fix: `deepseek/deepseek-v4-flash` returned HTTP 200, content `OK`, 15 JSON chunks, 12 reasoning chunks, `[DONE]` observed, malformed chunk count 0.
+- Short GLM alias smoke after fix: `/v1/models` exposes `glm-5.2` and `glm-5.1`; `glm-5.2` non-streaming returned HTTP 200, content `OK`; `glm-5.2` streaming returned HTTP 200, content `OK`, 3 chunks, `[DONE]` observed, malformed chunk count 0.
 
 ## Notes
 
 - The initial streaming deploy emitted plugin chunks as full SSE frames, while CLIProxyAPI's OpenAI handler also wraps chunks as SSE. That produced downstream `data: data: {...}` lines.
 - The stream fix changes Command Code plugin stream output to raw OpenAI chat-completion chunk JSON. The existing OpenAI handler remains responsible for `data:` framing and terminal `[DONE]`.
 - GLM-5.2 and GLM-5.1 are part of the Command Code plugin model list in this branch.
+- Short aliases normalize only for upstream execution; response `model` currently reports the canonical Command Code ID such as `zai-org/GLM-5.2`.

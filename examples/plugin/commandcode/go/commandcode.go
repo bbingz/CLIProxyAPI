@@ -796,6 +796,8 @@ func defaultCommandCodeModels() []pluginapi.ModelInfo {
 		{"moonshotai/Kimi-K2.5", "Kimi K2.5 (Command Code)", 256000, 65536},
 		{"zai-org/GLM-5.2", "GLM 5.2 (Command Code)", 1_000_000, 131072},
 		{"zai-org/GLM-5.1", "GLM 5.1 (Command Code)", 1_000_000, 131072},
+		{"glm-5.2", "GLM 5.2 (Command Code Alias)", 1_000_000, 131072},
+		{"glm-5.1", "GLM 5.1 (Command Code Alias)", 1_000_000, 131072},
 		{"MiniMaxAI/MiniMax-M3", "MiniMax M3 (Command Code)", 1_000_000, 131072},
 		{"Qwen/Qwen3.7-Max", "Qwen 3.7 Max (Command Code)", 1_000_000, 131072},
 		{"stepfun/Step-3.7-Flash", "Step 3.7 Flash (Command Code)", 1_000_000, 131072},
@@ -892,6 +894,12 @@ func intFromAny(value any) int {
 func normalizeCommandCodeModel(model string) string {
 	model = strings.TrimSpace(model)
 	model = strings.TrimPrefix(model, providerID+"/")
+	switch strings.ToLower(model) {
+	case "glm-5.2":
+		return "zai-org/GLM-5.2"
+	case "glm-5.1":
+		return "zai-org/GLM-5.1"
+	}
 	return model
 }
 
