@@ -688,15 +688,33 @@ func (a *commandCodeAggregate) ChatCompletion() ([]byte, error) {
 			"message":       message,
 			"finish_reason": finish,
 		}},
-		"usage": map[string]int{
-			"prompt_tokens":     a.Usage.InputTokens,
-			"completion_tokens": a.Usage.OutputTokens,
-			"total_tokens":      a.Usage.TotalTokens,
-		},
+		"usage": openAIUsageMap(a.Usage),
 	})
 }
 
 func commandCodeEventToOpenAIStreamChunks(line []byte, model string, created int64) ([][]byte, error) {
+	return newCommandCodeStreamConverter(model, created).ConvertLine(line)
+}
+
+type commandCodeStreamConverter struct {
+	model         string
+	created       int64
+	pendingUsage  *commandCodeUsage
+	finishEmitted bool
+	usageEmitted  bool
+}
+
+func newCommandCodeStreamConverter(model string, created int64) *commandCodeStreamConverter {
+	if created == 0 {
+		created = time.Now().Unix()
+	}
+	return &commandCodeStreamConverter{
+		model:   normalizeCommandCodeModel(model),
+		created: created,
+	}
+}
+
+func (c *commandCodeStreamConverter) ConvertLine(line []byte) ([][]byte, error) {
 	var event map[string]any
 	if errUnmarshal := json.Unmarshal(bytes.TrimSpace(line), &event); errUnmarshal != nil {
 		return nil, fmt.Errorf("decode commandcode ndjson: %w", errUnmarshal)
@@ -707,24 +725,54 @@ func commandCodeEventToOpenAIStreamChunks(line []byte, model string, created int
 		if text == "" {
 			return nil, nil
 		}
-		return [][]byte{chatCompletionStreamChunk(model, created, map[string]any{"reasoning_content": text}, "")}, nil
+		return [][]byte{chatCompletionStreamChunk(c.model, c.created, map[string]any{"reasoning_content": text}, "")}, nil
 	case "text-delta":
 		text := rawStringFromAny(event["text"])
 		if text == "" {
 			return nil, nil
 		}
-		return [][]byte{chatCompletionStreamChunk(model, created, map[string]any{"content": text}, "")}, nil
-	case "finish-step", "finish":
+		return [][]byte{chatCompletionStreamChunk(c.model, c.created, map[string]any{"content": text}, "")}, nil
+	case "finish-step":
+		if usage, ok := commandCodeUsageFromEvent(event); ok {
+			c.pendingUsage = &usage
+		}
+		return nil, nil
+	case "finish":
 		finish := mapFinishReason(stringFromAny(event["finishReason"]))
 		if finish == "" {
 			finish = "stop"
 		}
-		return [][]byte{chatCompletionStreamChunk(model, created, map[string]any{}, finish)}, nil
+		usage, hasUsage := commandCodeUsageFromEvent(event)
+		if !hasUsage && c.pendingUsage != nil {
+			usage = *c.pendingUsage
+			hasUsage = true
+		}
+		return c.finishChunks(finish, usage, hasUsage), nil
 	case "error":
 		return nil, fmt.Errorf("commandcode upstream error: %s", firstNonEmptyString(stringFromAny(event["message"]), stringFromAny(event["error"])))
 	default:
 		return nil, nil
 	}
+}
+
+func (c *commandCodeStreamConverter) FlushFinal() [][]byte {
+	if c.finishEmitted || c.pendingUsage == nil {
+		return nil
+	}
+	return c.finishChunks("stop", *c.pendingUsage, true)
+}
+
+func (c *commandCodeStreamConverter) finishChunks(finish string, usage commandCodeUsage, hasUsage bool) [][]byte {
+	if c.finishEmitted {
+		return nil
+	}
+	c.finishEmitted = true
+	chunks := [][]byte{chatCompletionStreamChunk(c.model, c.created, map[string]any{}, finish)}
+	if hasUsage && !c.usageEmitted {
+		c.usageEmitted = true
+		chunks = append(chunks, chatCompletionUsageStreamChunk(c.model, c.created, usage))
+	}
+	return chunks
 }
 
 func chatCompletionStreamChunk(model string, created int64, delta map[string]any, finish string) []byte {
@@ -745,16 +793,34 @@ func chatCompletionStreamChunk(model string, created int64, delta map[string]any
 	return body
 }
 
+func chatCompletionUsageStreamChunk(model string, created int64, usage commandCodeUsage) []byte {
+	body, _ := json.Marshal(map[string]any{
+		"id":      "chatcmpl-commandcode",
+		"object":  "chat.completion.chunk",
+		"created": created,
+		"model":   normalizeCommandCodeModel(model),
+		"choices": []any{},
+		"usage":   openAIUsageMap(usage),
+	})
+	return body
+}
+
+func commandCodeUsageFromEvent(event map[string]any) (commandCodeUsage, bool) {
+	usageMap, ok := event["usage"].(map[string]any)
+	if !ok {
+		return commandCodeUsage{}, false
+	}
+	usage := parseCommandCodeUsage(usageMap)
+	return usage, usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.TotalTokens != 0 || usage.CachedInputTokens != 0
+}
+
 func parseCommandCodeUsage(raw map[string]any) commandCodeUsage {
 	input := intFromAny(raw["inputTokens"])
 	cached := intFromAny(raw["cachedInputTokens"])
-	if input >= cached {
-		input -= cached
-	}
 	output := intFromAny(raw["outputTokens"])
-	total := intFromAny(raw["totalTokens"])
+	total := input + output
 	if total == 0 {
-		total = input + cached + output
+		total = intFromAny(raw["totalTokens"])
 	}
 	return commandCodeUsage{
 		InputTokens:       input,
@@ -762,6 +828,18 @@ func parseCommandCodeUsage(raw map[string]any) commandCodeUsage {
 		TotalTokens:       total,
 		CachedInputTokens: cached,
 	}
+}
+
+func openAIUsageMap(usage commandCodeUsage) map[string]any {
+	out := map[string]any{
+		"prompt_tokens":     usage.InputTokens,
+		"completion_tokens": usage.OutputTokens,
+		"total_tokens":      usage.TotalTokens,
+	}
+	if usage.CachedInputTokens > 0 {
+		out["prompt_tokens_details"] = map[string]int{"cached_tokens": usage.CachedInputTokens}
+	}
+	return out
 }
 
 func commandCodeAuthFromStorage(raw []byte) (commandCodeAuthStorage, error) {

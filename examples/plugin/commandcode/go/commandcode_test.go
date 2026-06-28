@@ -160,6 +160,25 @@ func TestCommandCodeNDJSONToChatCompletion(t *testing.T) {
 	}
 }
 
+func TestCommandCodeUsageUsesOpenAICompatibleTotals(t *testing.T) {
+	body, err := commandCodeNDJSONToChatCompletion([]byte(`{"type":"finish-step","finishReason":"stop","usage":{"inputTokens":10,"cachedInputTokens":3,"outputTokens":4,"totalTokens":999}}`), "glm-5.2", 123)
+	if err != nil {
+		t.Fatalf("convert ndjson: %v", err)
+	}
+	var completion map[string]any
+	if errUnmarshal := json.Unmarshal(body, &completion); errUnmarshal != nil {
+		t.Fatalf("unmarshal completion: %v", errUnmarshal)
+	}
+	usage := completion["usage"].(map[string]any)
+	if usage["prompt_tokens"] != float64(10) || usage["completion_tokens"] != float64(4) || usage["total_tokens"] != float64(14) {
+		t.Fatalf("usage = %#v", usage)
+	}
+	details := usage["prompt_tokens_details"].(map[string]any)
+	if details["cached_tokens"] != float64(3) {
+		t.Fatalf("prompt_tokens_details = %#v", details)
+	}
+}
+
 func TestCommandCodeEventToOpenAIStreamChunksReturnsPayloadOnly(t *testing.T) {
 	chunks, err := commandCodeEventToOpenAIStreamChunks([]byte(`{"type":"text-delta","id":"txt-0","text":"hello"}`), "deepseek/deepseek-v4-pro", 123)
 	if err != nil {
@@ -181,12 +200,60 @@ func TestCommandCodeEventToOpenAIStreamChunksReturnsPayloadOnly(t *testing.T) {
 		t.Fatalf("delta = %#v", delta)
 	}
 
-	finishChunks, err := commandCodeEventToOpenAIStreamChunks([]byte(`{"type":"finish-step","finishReason":"stop"}`), "deepseek/deepseek-v4-pro", 123)
+	finishChunks, err := commandCodeEventToOpenAIStreamChunks([]byte(`{"type":"finish","finishReason":"stop"}`), "deepseek/deepseek-v4-pro", 123)
 	if err != nil {
 		t.Fatalf("convert finish event: %v", err)
 	}
 	if len(finishChunks) != 1 || strings.Contains(string(finishChunks[0]), "[DONE]") {
 		t.Fatalf("finish chunks = %#v", finishChunks)
+	}
+}
+
+func TestCommandCodeStreamConverterEmitsFinalUsageOnce(t *testing.T) {
+	converter := newCommandCodeStreamConverter("glm-5.2", 123)
+	stepChunks, err := converter.ConvertLine([]byte(`{"type":"finish-step","finishReason":"stop","usage":{"inputTokens":10,"cachedInputTokens":3,"outputTokens":4,"totalTokens":14}}`))
+	if err != nil {
+		t.Fatalf("convert finish-step: %v", err)
+	}
+	if len(stepChunks) != 0 {
+		t.Fatalf("finish-step chunks = %d, want usage cached until terminal finish", len(stepChunks))
+	}
+	finishChunks, err := converter.ConvertLine([]byte(`{"type":"finish","finishReason":"stop"}`))
+	if err != nil {
+		t.Fatalf("convert finish: %v", err)
+	}
+	if len(finishChunks) != 2 {
+		t.Fatalf("finish chunks = %d, want finish and usage chunks", len(finishChunks))
+	}
+	var finish map[string]any
+	if errUnmarshal := json.Unmarshal(finishChunks[0], &finish); errUnmarshal != nil {
+		t.Fatalf("unmarshal finish chunk: %v", errUnmarshal)
+	}
+	choice := finish["choices"].([]any)[0].(map[string]any)
+	if choice["finish_reason"] != "stop" {
+		t.Fatalf("finish chunk = %#v", finish)
+	}
+	var usage map[string]any
+	if errUnmarshal := json.Unmarshal(finishChunks[1], &usage); errUnmarshal != nil {
+		t.Fatalf("unmarshal usage chunk: %v", errUnmarshal)
+	}
+	if len(usage["choices"].([]any)) != 0 {
+		t.Fatalf("usage choices = %#v, want empty", usage["choices"])
+	}
+	gotUsage := usage["usage"].(map[string]any)
+	if gotUsage["prompt_tokens"] != float64(10) || gotUsage["completion_tokens"] != float64(4) || gotUsage["total_tokens"] != float64(14) {
+		t.Fatalf("usage = %#v", gotUsage)
+	}
+	details := gotUsage["prompt_tokens_details"].(map[string]any)
+	if details["cached_tokens"] != float64(3) {
+		t.Fatalf("prompt_tokens_details = %#v", details)
+	}
+	duplicate, err := converter.ConvertLine([]byte(`{"type":"finish","finishReason":"stop"}`))
+	if err != nil {
+		t.Fatalf("convert duplicate finish: %v", err)
+	}
+	if len(duplicate) != 0 {
+		t.Fatalf("duplicate finish emitted %d chunks", len(duplicate))
 	}
 }
 
