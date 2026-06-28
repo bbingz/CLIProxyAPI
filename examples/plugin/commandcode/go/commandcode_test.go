@@ -160,6 +160,36 @@ func TestCommandCodeNDJSONToChatCompletion(t *testing.T) {
 	}
 }
 
+func TestCommandCodeEventToOpenAIStreamChunksReturnsPayloadOnly(t *testing.T) {
+	chunks, err := commandCodeEventToOpenAIStreamChunks([]byte(`{"type":"text-delta","id":"txt-0","text":"hello"}`), "deepseek/deepseek-v4-pro", 123)
+	if err != nil {
+		t.Fatalf("convert stream event: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("chunks = %d, want 1", len(chunks))
+	}
+	if strings.HasPrefix(string(chunks[0]), "data:") || strings.Contains(string(chunks[0]), "[DONE]") {
+		t.Fatalf("chunk must be a raw JSON payload, got %q", string(chunks[0]))
+	}
+	var chunk map[string]any
+	if errUnmarshal := json.Unmarshal(chunks[0], &chunk); errUnmarshal != nil {
+		t.Fatalf("unmarshal chunk: %v", errUnmarshal)
+	}
+	choice := chunk["choices"].([]any)[0].(map[string]any)
+	delta := choice["delta"].(map[string]any)
+	if delta["content"] != "hello" {
+		t.Fatalf("delta = %#v", delta)
+	}
+
+	finishChunks, err := commandCodeEventToOpenAIStreamChunks([]byte(`{"type":"finish-step","finishReason":"stop"}`), "deepseek/deepseek-v4-pro", 123)
+	if err != nil {
+		t.Fatalf("convert finish event: %v", err)
+	}
+	if len(finishChunks) != 1 || strings.Contains(string(finishChunks[0]), "[DONE]") {
+		t.Fatalf("finish chunks = %#v", finishChunks)
+	}
+}
+
 func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	raw, err := json.Marshal(value)

@@ -404,7 +404,7 @@ func streamCommandCodeNDJSONToHost(pluginStreamID, upstreamStreamID, model strin
 			if len(line) == 0 {
 				continue
 			}
-			frames, errFrame := commandCodeEventToSSE(line, model, created)
+			frames, errFrame := commandCodeEventToOpenAIStreamChunks(line, model, created)
 			if errFrame != nil {
 				_ = callHost(pluginabi.MethodHostStreamClose, rpcStreamCloseRequest{StreamID: pluginStreamID, Error: errFrame.Error()}, nil)
 				return
@@ -418,7 +418,7 @@ func streamCommandCodeNDJSONToHost(pluginStreamID, upstreamStreamID, model strin
 		if readResp.Done {
 			line := bytes.TrimSpace(buffer)
 			if len(line) > 0 {
-				frames, errFrame := commandCodeEventToSSE(line, model, created)
+				frames, errFrame := commandCodeEventToOpenAIStreamChunks(line, model, created)
 				if errFrame != nil {
 					_ = callHost(pluginabi.MethodHostStreamClose, rpcStreamCloseRequest{StreamID: pluginStreamID, Error: errFrame.Error()}, nil)
 					return

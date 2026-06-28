@@ -696,7 +696,7 @@ func (a *commandCodeAggregate) ChatCompletion() ([]byte, error) {
 	})
 }
 
-func commandCodeEventToSSE(line []byte, model string, created int64) ([][]byte, error) {
+func commandCodeEventToOpenAIStreamChunks(line []byte, model string, created int64) ([][]byte, error) {
 	var event map[string]any
 	if errUnmarshal := json.Unmarshal(bytes.TrimSpace(line), &event); errUnmarshal != nil {
 		return nil, fmt.Errorf("decode commandcode ndjson: %w", errUnmarshal)
@@ -707,19 +707,19 @@ func commandCodeEventToSSE(line []byte, model string, created int64) ([][]byte, 
 		if text == "" {
 			return nil, nil
 		}
-		return [][]byte{sseChatChunk(model, created, map[string]any{"reasoning_content": text}, "")}, nil
+		return [][]byte{chatCompletionStreamChunk(model, created, map[string]any{"reasoning_content": text}, "")}, nil
 	case "text-delta":
 		text := rawStringFromAny(event["text"])
 		if text == "" {
 			return nil, nil
 		}
-		return [][]byte{sseChatChunk(model, created, map[string]any{"content": text}, "")}, nil
+		return [][]byte{chatCompletionStreamChunk(model, created, map[string]any{"content": text}, "")}, nil
 	case "finish-step", "finish":
 		finish := mapFinishReason(stringFromAny(event["finishReason"]))
 		if finish == "" {
 			finish = "stop"
 		}
-		return [][]byte{sseChatChunk(model, created, map[string]any{}, finish), []byte("data: [DONE]\n\n")}, nil
+		return [][]byte{chatCompletionStreamChunk(model, created, map[string]any{}, finish)}, nil
 	case "error":
 		return nil, fmt.Errorf("commandcode upstream error: %s", firstNonEmptyString(stringFromAny(event["message"]), stringFromAny(event["error"])))
 	default:
@@ -727,7 +727,7 @@ func commandCodeEventToSSE(line []byte, model string, created int64) ([][]byte, 
 	}
 }
 
-func sseChatChunk(model string, created int64, delta map[string]any, finish string) []byte {
+func chatCompletionStreamChunk(model string, created int64, delta map[string]any, finish string) []byte {
 	choice := map[string]any{
 		"index": 0,
 		"delta": delta,
@@ -742,7 +742,7 @@ func sseChatChunk(model string, created int64, delta map[string]any, finish stri
 		"model":   normalizeCommandCodeModel(model),
 		"choices": []any{choice},
 	})
-	return append(append([]byte("data: "), body...), []byte("\n\n")...)
+	return body
 }
 
 func parseCommandCodeUsage(raw map[string]any) commandCodeUsage {
