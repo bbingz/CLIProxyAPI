@@ -6,32 +6,33 @@
 - Deployed the feature branch build to `10.0.8.9` for live stability testing.
 - Installed the Command Code plugin at `/Users/bing/-Tools-/CLIProxyAPI/plugins/commandcode.dylib`.
 - Installed Command Code auth material at `/Users/bing/.cli-proxy-api/commandcode.json` with mode `0600`.
-- Added short GLM aliases `glm-5.2` and `glm-5.1` after UI validation showed clients commonly use those names instead of the canonical Command Code IDs.
+- Added short aliases for every Command Code canonical model after UI validation showed clients commonly use un-namespaced names such as `glm-5.2`.
 
 ## Live host state
 
 - Host: `10.0.8.9`
 - Service command: `/Users/bing/-Tools-/CLIProxyAPI/bin/CLIProxyAPI -config /Users/bing/-Tools-/CLIProxyAPI/config.yaml`
-- Active PID after GLM alias deploy: `25194`
+- Active PID after all-alias deploy: `28752`
 - Listening port: `8317`
 - Main deployment backup: `/Users/bing/-Tools-/CLIProxyAPI/deploy-backups/20260628-181740`
 - Stream-fix plugin backup: `/Users/bing/-Tools-/CLIProxyAPI/deploy-backups/20260628-182420-streamfix`
 - GLM alias plugin backup: `/Users/bing/-Tools-/CLIProxyAPI/deploy-backups/20260628-184036-glm-alias`
-- Deployed GLM alias plugin sha256: `7943b7e89d4b0967c4ad2ff575d1a54cbc85a0b55a99750d7bcf93249571ba07`
+- All-alias plugin backup: `/Users/bing/-Tools-/CLIProxyAPI/deploy-backups/20260628-192513-all-aliases`
+- Deployed all-alias plugin sha256: `6a6e5fc5c963a36c5896e68bf78fdb7e362eb435d2cd28cb3023e56251d398d1`
 
 ## Verification
 
-- `/v1/models` on `10.0.8.9` returned HTTP 200 with 35 models.
-- Command Code models visible: 12 `owned_by=commandcode` models, including `deepseek/deepseek-v4-flash`, `deepseek/deepseek-v4-pro`, `zai-org/GLM-5.2`, and `zai-org/GLM-5.1`.
+- `/v1/models` on `10.0.8.9` returned HTTP 200 with 47 models.
+- Command Code models visible: 24 `owned_by=commandcode` models, covering 12 canonical model IDs plus 12 short aliases.
 - Existing model counts remained unchanged after plugin enablement: Grok 12, Gemini 8.
 - `zai-org/GLM-5.2` is provided by the Command Code plugin and passed a non-streaming chat smoke test.
 - Command Code non-streaming smoke: `deepseek/deepseek-v4-flash` returned HTTP 200, content `OK`, usage present.
 - Command Code streaming smoke after fix: `deepseek/deepseek-v4-flash` returned HTTP 200, content `OK`, 15 JSON chunks, 12 reasoning chunks, `[DONE]` observed, malformed chunk count 0.
-- Short GLM alias smoke after fix: `/v1/models` exposes `glm-5.2` and `glm-5.1`; `glm-5.2` non-streaming returned HTTP 200, content `OK`; `glm-5.2` streaming returned HTTP 200, content `OK`, 3 chunks, `[DONE]` observed, malformed chunk count 0.
+- Short alias smoke after fix: `/v1/models` exposes all 12 expected short aliases; `glm-5.2` and `deepseek-v4-flash` both returned HTTP 200/content `OK` for non-streaming and streaming requests, with `[DONE]` observed and malformed chunk count 0 for both streams.
 
 ## Notes
 
 - The initial streaming deploy emitted plugin chunks as full SSE frames, while CLIProxyAPI's OpenAI handler also wraps chunks as SSE. That produced downstream `data: data: {...}` lines.
 - The stream fix changes Command Code plugin stream output to raw OpenAI chat-completion chunk JSON. The existing OpenAI handler remains responsible for `data:` framing and terminal `[DONE]`.
 - GLM-5.2 and GLM-5.1 are part of the Command Code plugin model list in this branch.
-- Short aliases normalize only for upstream execution; response `model` currently reports the canonical Command Code ID such as `zai-org/GLM-5.2`.
+- Short aliases normalize only for upstream execution; response `model` currently reports the canonical Command Code ID such as `zai-org/GLM-5.2` or `deepseek/deepseek-v4-flash`.

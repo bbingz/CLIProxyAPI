@@ -190,21 +190,38 @@ func TestCommandCodeEventToOpenAIStreamChunksReturnsPayloadOnly(t *testing.T) {
 	}
 }
 
-func TestCommandCodeGLMAliases(t *testing.T) {
-	if got := normalizeCommandCodeModel("glm-5.2"); got != "zai-org/GLM-5.2" {
-		t.Fatalf("normalize glm-5.2 = %q", got)
-	}
-	if got := normalizeCommandCodeModel("commandcode/glm-5.1"); got != "zai-org/GLM-5.1" {
-		t.Fatalf("normalize commandcode/glm-5.1 = %q", got)
-	}
+func TestCommandCodeShortAliases(t *testing.T) {
 	models := defaultCommandCodeModels()
 	seen := map[string]bool{}
 	for _, model := range models {
 		seen[model.ID] = true
 	}
-	for _, id := range []string{"glm-5.2", "glm-5.1", "zai-org/GLM-5.2", "zai-org/GLM-5.1"} {
-		if !seen[id] {
-			t.Fatalf("model %q not registered", id)
+	aliases := map[string]string{
+		"deepseek-v4-pro":            "deepseek/deepseek-v4-pro",
+		"deepseek-v4-flash":          "deepseek/deepseek-v4-flash",
+		"kimi-k2.7-code":             "moonshotai/Kimi-K2.7-Code",
+		"kimi-k2.7-code-highspeed":   "moonshotai/Kimi-K2.7-Code-Highspeed",
+		"kimi-k2.6":                  "moonshotai/Kimi-K2.6",
+		"kimi-k2.5":                  "moonshotai/Kimi-K2.5",
+		"glm-5.2":                    "zai-org/GLM-5.2",
+		"glm-5.1":                    "zai-org/GLM-5.1",
+		"minimax-m3":                 "MiniMaxAI/MiniMax-M3",
+		"qwen3.7-max":                "Qwen/Qwen3.7-Max",
+		"step-3.7-flash":             "stepfun/Step-3.7-Flash",
+		"nemotron-3-ultra-550b-a55b": "nvidia/nemotron-3-ultra-550b-a55b",
+	}
+	for alias, canonical := range aliases {
+		if !seen[alias] {
+			t.Fatalf("alias model %q not registered", alias)
+		}
+		if !seen[canonical] {
+			t.Fatalf("canonical model %q not registered", canonical)
+		}
+		if got := normalizeCommandCodeModel(alias); got != canonical {
+			t.Fatalf("normalize %q = %q, want %q", alias, got, canonical)
+		}
+		if got := normalizeCommandCodeModel("commandcode/" + alias); got != canonical {
+			t.Fatalf("normalize commandcode/%s = %q, want %q", alias, got, canonical)
 		}
 	}
 }

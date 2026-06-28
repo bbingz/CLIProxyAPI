@@ -781,49 +781,78 @@ func commandCodeAuthFromStorage(raw []byte) (commandCodeAuthStorage, error) {
 	return storage, nil
 }
 
-func defaultCommandCodeModels() []pluginapi.ModelInfo {
-	defs := []struct {
-		id      string
-		display string
-		ctx     int64
-		out     int64
-	}{
-		{"deepseek/deepseek-v4-pro", "DeepSeek V4 Pro (Command Code)", 1_000_000, 131072},
-		{"deepseek/deepseek-v4-flash", "DeepSeek V4 Flash (Command Code)", 1_000_000, 131072},
-		{"moonshotai/Kimi-K2.7-Code", "Kimi K2.7 Code (Command Code)", 256000, 65536},
-		{"moonshotai/Kimi-K2.7-Code-Highspeed", "Kimi K2.7 Code HighSpeed (Command Code)", 262000, 65536},
-		{"moonshotai/Kimi-K2.6", "Kimi K2.6 (Command Code)", 256000, 65536},
-		{"moonshotai/Kimi-K2.5", "Kimi K2.5 (Command Code)", 256000, 65536},
-		{"zai-org/GLM-5.2", "GLM 5.2 (Command Code)", 1_000_000, 131072},
-		{"zai-org/GLM-5.1", "GLM 5.1 (Command Code)", 1_000_000, 131072},
-		{"glm-5.2", "GLM 5.2 (Command Code Alias)", 1_000_000, 131072},
-		{"glm-5.1", "GLM 5.1 (Command Code Alias)", 1_000_000, 131072},
-		{"MiniMaxAI/MiniMax-M3", "MiniMax M3 (Command Code)", 1_000_000, 131072},
-		{"Qwen/Qwen3.7-Max", "Qwen 3.7 Max (Command Code)", 1_000_000, 131072},
-		{"stepfun/Step-3.7-Flash", "Step 3.7 Flash (Command Code)", 1_000_000, 131072},
-		{"nvidia/nemotron-3-ultra-550b-a55b", "Nemotron 3 Ultra (Command Code)", 1_000_000, 131072},
+type commandCodeModelDefinition struct {
+	id      string
+	display string
+	aliases []string
+	ctx     int64
+	out     int64
+}
+
+func commandCodeModelDefinitions() []commandCodeModelDefinition {
+	return []commandCodeModelDefinition{
+		{"deepseek/deepseek-v4-pro", "DeepSeek V4 Pro (Command Code)", []string{"deepseek-v4-pro"}, 1_000_000, 131072},
+		{"deepseek/deepseek-v4-flash", "DeepSeek V4 Flash (Command Code)", []string{"deepseek-v4-flash"}, 1_000_000, 131072},
+		{"moonshotai/Kimi-K2.7-Code", "Kimi K2.7 Code (Command Code)", []string{"kimi-k2.7-code"}, 256000, 65536},
+		{"moonshotai/Kimi-K2.7-Code-Highspeed", "Kimi K2.7 Code HighSpeed (Command Code)", []string{"kimi-k2.7-code-highspeed"}, 262000, 65536},
+		{"moonshotai/Kimi-K2.6", "Kimi K2.6 (Command Code)", []string{"kimi-k2.6"}, 256000, 65536},
+		{"moonshotai/Kimi-K2.5", "Kimi K2.5 (Command Code)", []string{"kimi-k2.5"}, 256000, 65536},
+		{"zai-org/GLM-5.2", "GLM 5.2 (Command Code)", []string{"glm-5.2"}, 1_000_000, 131072},
+		{"zai-org/GLM-5.1", "GLM 5.1 (Command Code)", []string{"glm-5.1"}, 1_000_000, 131072},
+		{"MiniMaxAI/MiniMax-M3", "MiniMax M3 (Command Code)", []string{"minimax-m3"}, 1_000_000, 131072},
+		{"Qwen/Qwen3.7-Max", "Qwen 3.7 Max (Command Code)", []string{"qwen3.7-max"}, 1_000_000, 131072},
+		{"stepfun/Step-3.7-Flash", "Step 3.7 Flash (Command Code)", []string{"step-3.7-flash"}, 1_000_000, 131072},
+		{"nvidia/nemotron-3-ultra-550b-a55b", "Nemotron 3 Ultra (Command Code)", []string{"nemotron-3-ultra-550b-a55b"}, 1_000_000, 131072},
 	}
-	models := make([]pluginapi.ModelInfo, 0, len(defs))
+}
+
+func defaultCommandCodeModels() []pluginapi.ModelInfo {
+	defs := commandCodeModelDefinitions()
+	models := make([]pluginapi.ModelInfo, 0, len(defs)*2)
+	seen := make(map[string]struct{}, len(defs)*2)
+	add := func(id, display string, ctx, out int64) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		key := strings.ToLower(id)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		models = append(models, commandCodeModelInfo(id, display, ctx, out))
+	}
 	for _, def := range defs {
-		models = append(models, pluginapi.ModelInfo{
-			ID:                         def.id,
-			Object:                     "model",
-			OwnedBy:                    providerID,
-			Type:                       "chat",
-			DisplayName:                def.display,
-			Name:                       def.id,
-			Description:                "Command Code /alpha/generate model",
-			InputTokenLimit:            def.ctx,
-			OutputTokenLimit:           def.out,
-			ContextLength:              def.ctx,
-			MaxCompletionTokens:        def.out,
-			SupportedGenerationMethods: []string{"chat"},
-			SupportedInputModalities:   []string{"text"},
-			SupportedOutputModalities:  []string{"text"},
-			UserDefined:                true,
-		})
+		add(def.id, def.display, def.ctx, def.out)
+		for _, alias := range def.aliases {
+			add(alias, commandCodeAliasDisplay(def.display), def.ctx, def.out)
+		}
 	}
 	return models
+}
+
+func commandCodeModelInfo(id, display string, ctx, out int64) pluginapi.ModelInfo {
+	return pluginapi.ModelInfo{
+		ID:                         id,
+		Object:                     "model",
+		OwnedBy:                    providerID,
+		Type:                       "chat",
+		DisplayName:                display,
+		Name:                       id,
+		Description:                "Command Code /alpha/generate model",
+		InputTokenLimit:            ctx,
+		OutputTokenLimit:           out,
+		ContextLength:              ctx,
+		MaxCompletionTokens:        out,
+		SupportedGenerationMethods: []string{"chat"},
+		SupportedInputModalities:   []string{"text"},
+		SupportedOutputModalities:  []string{"text"},
+		UserDefined:                true,
+	}
+}
+
+func commandCodeAliasDisplay(display string) string {
+	return strings.TrimSuffix(display, " (Command Code)") + " (Command Code Alias)"
 }
 
 func randomOAuthState() (string, error) {
@@ -894,11 +923,15 @@ func intFromAny(value any) int {
 func normalizeCommandCodeModel(model string) string {
 	model = strings.TrimSpace(model)
 	model = strings.TrimPrefix(model, providerID+"/")
-	switch strings.ToLower(model) {
-	case "glm-5.2":
-		return "zai-org/GLM-5.2"
-	case "glm-5.1":
-		return "zai-org/GLM-5.1"
+	for _, def := range commandCodeModelDefinitions() {
+		if strings.EqualFold(model, def.id) {
+			return def.id
+		}
+		for _, alias := range def.aliases {
+			if strings.EqualFold(model, alias) {
+				return def.id
+			}
+		}
 	}
 	return model
 }
