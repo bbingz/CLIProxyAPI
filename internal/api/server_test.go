@@ -147,6 +147,36 @@ func TestOAuthCallbackRouteSkipsManagementKeyMiddleware(t *testing.T) {
 	}
 }
 
+func TestPluginOAuthCallbackRouteSkipsManagementKeyMiddleware(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "test-management-key")
+
+	server := newTestServer(t)
+	state := "server-commandcode-oauth-state"
+	if errRegister := managementHandlers.RegisterPluginOAuthSession(state, "commandcode", map[string]any{
+		"allowed_origins": []any{"https://commandcode.ai"},
+	}); errRegister != nil {
+		t.Fatalf("register plugin oauth session: %v", errRegister)
+	}
+	defer managementHandlers.CompleteOAuthSession(state)
+
+	req := httptest.NewRequest(http.MethodPost, "/v0/plugin/oauth-callback", strings.NewReader(`{"provider":"commandcode","state":"`+state+`","apiKey":"user_test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://commandcode.ai")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	_, _, isPlugin, metadata, ok := managementHandlers.GetOAuthSessionDetails(state)
+	if !ok || !isPlugin {
+		t.Fatal("expected pending plugin oauth session")
+	}
+	if got, _ := metadata["apiKey"].(string); got != "user_test" {
+		t.Fatalf("apiKey metadata = %q", got)
+	}
+}
+
 func TestNewServerWithPluginHostInjectsHandlerInterceptors(t *testing.T) {
 	host := pluginhost.New()
 	server := newTestServerWithOptions(t, WithPluginHost(host))

@@ -116,6 +116,80 @@ func TestGetOAuthCallbackDoesNotAliasPluginProvider(t *testing.T) {
 	}
 }
 
+func TestPostPluginOAuthCallbackMergesMetadata(t *testing.T) {
+	authDir := filepath.Join(t.TempDir(), "missing-auth")
+	state := "test-commandcode-plugin-state"
+	if errRegister := RegisterPluginOAuthSession(state, "commandcode", map[string]any{
+		"login_kind": "commandcode-studio",
+	}); errRegister != nil {
+		t.Fatalf("register plugin oauth session: %v", errRegister)
+	}
+	defer CompleteOAuthSession(state)
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, nil)
+	router := gin.New()
+	router.POST("/v0/plugin/oauth-callback", h.PostPluginOAuthCallback)
+
+	body := `{"provider":"commandcode","state":"test-commandcode-plugin-state","apiKey":"user_test_commandcode_token"}`
+	req := httptest.NewRequest(http.MethodPost, "/v0/plugin/oauth-callback", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	_, _, isPlugin, metadata, ok := GetOAuthSessionDetails(state)
+	if !ok {
+		t.Fatal("expected plugin oauth session to remain pending for poll")
+	}
+	if !isPlugin {
+		t.Fatal("expected plugin oauth session")
+	}
+	if got, _ := metadata["apiKey"].(string); got != "user_test_commandcode_token" {
+		t.Fatalf("apiKey metadata = %q, want commandcode token", got)
+	}
+	if got, _ := metadata["login_kind"].(string); got != "commandcode-studio" {
+		t.Fatalf("existing metadata was not preserved: %+v", metadata)
+	}
+	if _, errRead := os.ReadFile(filepath.Join(authDir, ".oauth-commandcode-"+state+".oauth")); errRead == nil {
+		t.Fatal("unexpected oauth callback file for plugin metadata callback")
+	}
+}
+
+func TestOptionsPluginOAuthCallbackAllowsConfiguredOrigin(t *testing.T) {
+	state := "test-commandcode-plugin-cors"
+	if errRegister := RegisterPluginOAuthSession(state, "commandcode", map[string]any{
+		"allowed_origins": []any{"https://commandcode.ai"},
+	}); errRegister != nil {
+		t.Fatalf("register plugin oauth session: %v", errRegister)
+	}
+	defer CompleteOAuthSession(state)
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: t.TempDir()}, nil)
+	router := gin.New()
+	router.OPTIONS("/v0/plugin/oauth-callback", h.OptionsPluginOAuthCallback)
+
+	req := httptest.NewRequest(http.MethodOptions, "/v0/plugin/oauth-callback?state="+state, nil)
+	req.Header.Set("Origin", "https://commandcode.ai")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusNoContent, w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "https://commandcode.ai" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want commandcode origin", got)
+	}
+	if got := w.Header().Get("Vary"); !strings.Contains(got, "Origin") {
+		t.Fatalf("Vary = %q, want Origin", got)
+	}
+}
+
 func TestWriteOAuthCallbackFileForPendingSessionCreatesMissingAuthDirForCallbackProviders(t *testing.T) {
 	providers := []string{"anthropic", "codex", "gemini", "antigravity", "xai"}
 	for _, provider := range providers {

@@ -281,7 +281,7 @@ func (h *Handler) ServePluginAuthURL(c *gin.Context) bool {
 	}
 
 	ctx := PopulateAuthContext(context.Background(), c)
-	baseURL, errBaseURL := h.managementCallbackURL("/v0/management/oauth-callback")
+	baseURL, errBaseURL := h.managementCallbackURL("/v0/plugin/oauth-callback")
 	if errBaseURL != nil {
 		log.WithError(errBaseURL).Error("failed to compute plugin auth callback URL")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate authorization url"})

@@ -595,6 +595,9 @@ func (s *Server) registerManagementRoutes() {
 
 	log.Info("management routes registered after secret key configuration")
 
+	s.engine.OPTIONS("/v0/plugin/oauth-callback", s.managementAvailabilityMiddleware(), s.mgmt.OptionsPluginOAuthCallback)
+	s.engine.POST("/v0/plugin/oauth-callback", s.managementAvailabilityMiddleware(), s.mgmt.PostPluginOAuthCallback)
+
 	s.engine.POST("/v0/management/oauth-callback", s.managementAvailabilityMiddleware(), s.mgmt.PostOAuthCallback)
 	s.engine.GET("/v0/management/oauth-callback", s.managementAvailabilityMiddleware(), s.mgmt.GetOAuthCallback)
 

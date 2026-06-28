@@ -26,6 +26,7 @@ This directory contains standard dynamic library plugin examples for the CLIProx
 - `host-callback/`: minimal plugin resource that demonstrates host callbacks.
 - `host-callback-auth-files/`: Go-only plugin resource that calls host auth file callbacks.
 - `host-model-callback/`: Go-only plugin resource that calls the host model execution callbacks.
+- `commandcode/`: Go-only OAuth auth provider, model provider, and executor for Command Code `/alpha/generate`.
 
 Most standard capability examples contain `go/`, `c/`, and `rust/` subdirectories. Specialized examples may provide only the implementation language they need.
 
@@ -73,6 +74,18 @@ plugins:
 ```
 
 The default example model is `gpt-5.5`, but the request succeeds only when the current CPA model and auth configuration can route that model.
+
+## Command Code
+
+`commandcode` declares auth provider, model provider, and executor capabilities. Login opens Command Code Studio and receives the browser callback on CPA's plugin OAuth callback endpoint. The executor sends chat-completions requests through Command Code's `/alpha/generate` envelope and parses NDJSON responses back to Chat Completions JSON or SSE.
+
+```yaml
+plugins:
+  configs:
+    commandcode:
+      enabled: true
+      priority: 1
+```
 
 ## Scheduler
 

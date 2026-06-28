@@ -184,6 +184,51 @@ func (s *oauthSessionStore) Get(state string) (oauthSession, bool) {
 	return session, ok
 }
 
+func (s *oauthSessionStore) MergePluginMetadata(state, provider string, metadata map[string]any) error {
+	state = strings.TrimSpace(state)
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if state == "" {
+		return fmt.Errorf("%w: empty state", errInvalidOAuthState)
+	}
+	if errState := ValidateOAuthState(state); errState != nil {
+		return errState
+	}
+	now := time.Now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.purgeExpiredLocked(now)
+	session, ok := s.sessions[state]
+	if !ok {
+		return errOAuthSessionNotPending
+	}
+	if session.Source != oauthSessionSourcePlugin {
+		return errUnsupportedOAuthFlow
+	}
+	if session.Status != "" {
+		return errOAuthSessionNotPending
+	}
+	if provider != "" && !strings.EqualFold(session.Provider, provider) {
+		return errUnsupportedOAuthFlow
+	}
+	merged := cloneOAuthSessionMetadata(session.Metadata)
+	if merged == nil {
+		merged = make(map[string]any, len(metadata))
+	}
+	for key, value := range metadata {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		merged[key] = value
+	}
+	session.Metadata = merged
+	session.ExpiresAt = now.Add(s.ttl)
+	s.sessions[state] = session
+	return nil
+}
+
 func (s *oauthSessionStore) IsPending(state, provider string) bool {
 	state = strings.TrimSpace(state)
 	provider = strings.ToLower(strings.TrimSpace(provider))
@@ -251,6 +296,10 @@ func GetOAuthSessionDetails(state string) (provider string, status string, isPlu
 		return "", "", false, nil, false
 	}
 	return session.Provider, session.Status, session.Source == oauthSessionSourcePlugin, cloneOAuthSessionMetadata(session.Metadata), true
+}
+
+func MergePluginOAuthSessionMetadata(state, provider string, metadata map[string]any) error {
+	return oauthSessions.MergePluginMetadata(state, provider, metadata)
 }
 
 func IsOAuthSessionPending(state, provider string) bool {
